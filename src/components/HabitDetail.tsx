@@ -9,6 +9,8 @@ import {
   HabitStatistics,
   habitStatusLabel,
   isHabitifyError,
+  formatQuantity,
+  skipHabit,
   sortTimeOfDays,
   TimeOfDay,
   undoHabit,
@@ -22,10 +24,6 @@ type Props = {
   habitName: string;
   onRefresh?: () => void;
 };
-
-function formatNumber(value: number) {
-  return Number.isInteger(value) ? `${value}` : value.toFixed(1);
-}
 
 function formatTimeOfDaySummary(timeOfDays: TimeOfDay[]) {
   if (timeOfDays.length === 0) {
@@ -52,13 +50,13 @@ function buildMarkdown(habit: Habit | null, stats: HabitStatistics | null) {
   const recentMarkdown =
     recentProgress.length > 0
       ? recentProgress
-          .map((day) => `- ${day.date}: ${habitStatusLabel(day.status)}${day.totalLog ? ` (${formatNumber(day.totalLog)}${unit ? ` ${unit}` : ""})` : ""}`)
+          .map((day) => `- ${day.date}: ${habitStatusLabel(day.status)}${day.totalLog ? ` (${formatQuantity(day.totalLog, unit)})` : ""}`)
           .join("\n")
       : "- No recent progress available";
 
-  const timeOfDaySummary = formatTimeOfDaySummary(habit.timeOfDays);
+  const timeOfDaySummary = formatTimeOfDaySummary(Array.isArray(habit.timeOfDays) ? habit.timeOfDays : []);
 
-  return `# ${habit.name}\n\n- *Type:* ${habit.type}\n- *Status:* ${habit.isArchived ? "Archived" : "Active"}\n- *Start date:* ${habit.startDate}\n- *Schedule:* ${timeOfDaySummary}\n- *Goal:* ${progressText}\n- *Total logs:* ${formatNumber(stats.totalLogs)}\n- *Completions:* ${stats.completions}\n- *Fails:* ${stats.fails}\n- *Skips:* ${stats.skips}\n- *Average:* ${formatNumber(stats.avg)}${unit ? ` ${unit}` : ""}\n\n## Recent daily progress\n${recentMarkdown}`;
+  return `# ${habit.name}\n\n- *Type:* ${habit.type}\n- *Status:* ${habit.isArchived ? "Archived" : "Active"}\n- *Start date:* ${habit.startDate}\n- *Schedule:* ${timeOfDaySummary}\n- *Goal:* ${progressText}\n- *Total logs:* ${formatQuantity(stats.totalLogs, "")}\n- *Completions:* ${stats.completions}\n- *Fails:* ${stats.fails}\n- *Skips:* ${stats.skips}\n- *Average:* ${formatQuantity(stats.avg, unit)}\n\n## Recent daily progress\n${recentMarkdown}`;
 }
 
 export default function HabitDetail({ apiKey, habitId, habitName, onRefresh }: Props) {
@@ -137,29 +135,32 @@ export default function HabitDetail({ apiKey, habitId, habitName, onRefresh }: P
     return buildMarkdown(habit, stats);
   }, [error, habit, habitName, stats]);
 
-  const mutate = async (action: "complete" | "undo") => {
+  const mutate = async (action: "complete" | "undo" | "skip") => {
     const targetDate = formatLocalDate(new Date());
     const toastPromise = showToast({
       style: Toast.Style.Animated,
-      title: action === "complete" ? "Completing habit…" : "Undoing habit…",
+      title: action === "complete" ? "Completing habit…" : action === "skip" ? "Skipping habit…" : "Undoing habit…",
     });
 
     try {
       if (action === "complete") {
         await completeHabit(apiKey, habitId, targetDate);
+      } else if (action === "skip") {
+        await skipHabit(apiKey, habitId, targetDate);
       } else {
         await undoHabit(apiKey, habitId, targetDate);
       }
       const toast = await toastPromise;
       toast.style = Toast.Style.Success;
-      toast.title = action === "complete" ? "Habit completed" : "Habit undone";
+      toast.title = action === "complete" ? "Habit completed" : action === "skip" ? "Habit skipped" : "Habit undone";
       toast.message = `Updated ${habitName} for ${targetDate}.`;
       await load();
       onRefresh?.();
     } catch (err) {
       const toast = await toastPromise;
       toast.style = Toast.Style.Failure;
-      toast.title = action === "complete" ? "Could not complete habit" : "Could not undo habit";
+      toast.title =
+        action === "complete" ? "Could not complete habit" : action === "skip" ? "Could not skip habit" : "Could not undo habit";
       toast.message = isHabitifyError(err)
         ? `Habitify returned ${err.status}: ${err.message}`
         : err instanceof Error
@@ -176,7 +177,8 @@ export default function HabitDetail({ apiKey, habitId, habitName, onRefresh }: P
       actions={
         <ActionPanel title={habitName}>
           <Action title="Refresh" icon={Icon.RotateClockwise} onAction={() => void load()} />
-          <Action title="Mark Completed" icon={Icon.CheckCircle} onAction={() => void mutate("complete")} />
+          <Action title="Mark Completed" icon={{ source: Icon.CheckCircle, tintColor: "#20B26B" }} onAction={() => void mutate("complete")} />
+          <Action title="Skip Today" icon={{ source: Icon.ArrowRight, tintColor: "#E8B200" }} onAction={() => void mutate("skip")} />
           <Action title="Undo Today" icon={Icon.ArrowCounterClockwise} onAction={() => void mutate("undo")} />
         </ActionPanel>
       }

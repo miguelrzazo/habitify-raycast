@@ -1,6 +1,6 @@
 # Habitify Raycast
 
-A private Raycast extension for Habitify that lets you inspect today's habits, mark them complete, undo today's log, and open a habit statistics view.
+A Raycast extension for Habitify that lets you inspect today's habits, mark them complete, undo today's log, and open a habit statistics view.
 
 ## Features
 - View today's Habitify habits in Raycast.

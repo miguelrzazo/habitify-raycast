@@ -17,6 +17,32 @@
       "description": "Create it in Habitify Settings > API. Required for all commands.",
       "type": "password",
       "required": true
+    },
+    {
+      "name": "rowColorMode",
+      "title": "Row Color Mode",
+      "description": "Choose how Raycast should tint habit rows.",
+      "type": "dropdown",
+      "required": true,
+      "default": "status",
+      "data": [
+        {
+          "title": "Status colors",
+          "value": "status"
+        },
+        {
+          "title": "Habit colors",
+          "value": "habit"
+        },
+        {
+          "title": "Area colors",
+          "value": "area"
+        },
+        {
+          "title": "Off",
+          "value": "off"
+        }
+      ]
     }
   ],
   "commands": [
@@ -39,22 +65,23 @@
       "mode": "view"
     },
     {
-      "name": "search",
-      "title": "Search Habits",
-      "description": "Find any habit and open its stats.",
-      "mode": "view"
-    },
-    {
       "name": "areas",
       "title": "Habit Areas",
       "description": "Browse habits grouped by area.",
+      "mode": "view"
+    },
+    {
+      "name": "today-stats",
+      "title": "Today Stats",
+      "description": "View today's overview metrics and streaks.",
       "mode": "view"
     }
   ],
   "scripts": {
     "dev": "ray develop",
     "build": "ray build",
-    "lint": "ray lint"
+    "lint": "ray lint",
+    "publish": "npx @raycast/api@latest publish"
   },
   "dependencies": {
     "@raycast/api": "^1.104.19",

@@ -21,12 +21,18 @@ import {
   habitStatusLabel,
   isHabitifyError,
   mergeJournalWithHabits,
+  resolveRowTint,
+  skipHabit,
+  sortTimeOfDays,
+  statusTintColor,
+  streakIcon,
   TodayHabit,
   undoHabit,
 } from "./lib/habitify";
 
 interface Preferences {
   apiKey: string;
+  rowColorMode: "off" | "status" | "habit" | "area";
 }
 
 function statusIcon(status: TodayHabit["status"]) {
@@ -34,7 +40,7 @@ function statusIcon(status: TodayHabit["status"]) {
     case "completed":
       return Icon.CheckCircle;
     case "skipped":
-      return Icon.MinusCircle;
+      return Icon.ArrowRight;
     case "failed":
       return Icon.XMarkCircle;
     default:
@@ -51,12 +57,14 @@ function nextStatusForAction(action: "complete" | "undo") {
 }
 
 export default function Command() {
-  const { apiKey } = getPreferenceValues<Preferences>();
+  const { apiKey, rowColorMode } = getPreferenceValues<Preferences>();
   const [habits, setHabits] = useState<TodayHabit[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshCounter, setRefreshCounter] = useState(0);
   const [cacheNotice, setCacheNotice] = useState<string | null>(null);
+  const [timeFilter, setTimeFilter] = useState<string>("due-now");
+  const [areaFilter, setAreaFilter] = useState<string>("all");
   const habitsRef = useRef<TodayHabit[]>([]);
 
   useEffect(() => {
@@ -82,9 +90,7 @@ export default function Command() {
         ]);
 
         if (cachedJournal && cachedHabits) {
-          const cachedMerged = mergeJournalWithHabits(cachedJournal.data.data, cachedHabits.data).filter(
-            (habit) => habit.currentTimeOfDay !== null,
-          );
+          const cachedMerged = mergeJournalWithHabits(cachedJournal.data.data, cachedHabits.data);
           setHabits(cachedMerged);
           const cachedAt = latestCacheTimestamp(cachedJournal.savedAt, cachedHabits.savedAt);
           setCacheNotice(cachedAt ? `Showing cached data from ${formatCacheTimestamp(cachedAt)}` : "Showing cached data");
@@ -113,7 +119,7 @@ export default function Command() {
           await writeCache(habitsCacheKey, habitsResult.value);
         }
 
-        const merged = mergeJournalWithHabits(journalData, habitCatalog).filter((habit) => habit.currentTimeOfDay !== null);
+        const merged = mergeJournalWithHabits(journalData, habitCatalog);
         setHabits(merged);
 
         const usedCache = journalResult.status !== "fulfilled" || habitsResult.status !== "fulfilled";
@@ -141,26 +147,29 @@ export default function Command() {
   }, []);
 
   const mutateHabit = useCallback(
-    async (habitId: string, habitName: string, action: "complete" | "undo") => {
+    async (habitId: string, habitName: string, action: "complete" | "undo" | "skip") => {
       const targetDate = formatLocalDate(new Date());
       const rollbackSnapshot = habitsRef.current;
       const toastPromise = showToast({
         style: Toast.Style.Animated,
-        title: action === "complete" ? "Completing habit…" : "Undoing habit…",
+        title:
+          action === "complete" ? "Completing habit…" : action === "skip" ? "Skipping habit…" : "Undoing habit…",
       });
 
-      updateHabitStatus(habitId, nextStatusForAction(action));
+      updateHabitStatus(habitId, action === "skip" ? "skipped" : nextStatusForAction(action));
 
       try {
         if (action === "complete") {
           await completeHabit(apiKey, habitId, targetDate);
+        } else if (action === "skip") {
+          await skipHabit(apiKey, habitId, targetDate);
         } else {
           await undoHabit(apiKey, habitId, targetDate);
         }
 
         const toast = await toastPromise;
         toast.style = Toast.Style.Success;
-        toast.title = action === "complete" ? "Habit completed" : "Habit undone";
+        toast.title = action === "complete" ? "Habit completed" : action === "skip" ? "Habit skipped" : "Habit undone";
         toast.message = habitName;
         void loadHabits({ silent: true });
       } catch (err) {
@@ -168,7 +177,12 @@ export default function Command() {
 
         const toast = await toastPromise;
         toast.style = Toast.Style.Failure;
-        toast.title = action === "complete" ? "Could not complete habit" : "Could not undo habit";
+        toast.title =
+          action === "complete"
+            ? "Could not complete habit"
+            : action === "skip"
+              ? "Could not skip habit"
+              : "Could not undo habit";
         toast.message = isHabitifyError(err)
           ? `Habitify returned ${err.status}: ${err.message}`
           : err instanceof Error
@@ -179,7 +193,35 @@ export default function Command() {
     [apiKey, loadHabits, updateHabitStatus],
   );
 
-  const groups = useMemo(() => groupTodayHabits(habits), [habits]);
+  const timeOfDays = useMemo(() => {
+    const pairs = habits.flatMap((habit) => habit.timeOfDays.map((period) => [period.id, period] as const));
+    return sortTimeOfDays(Array.from(new Map(pairs).values()));
+  }, [habits]);
+
+  const areas = useMemo(() => {
+    const pairs = habits.flatMap((habit) => habit.areas.map((area) => [area.id, area] as const));
+    return Array.from(new Map(pairs).values()).sort((left, right) => left.name.localeCompare(right.name));
+  }, [habits]);
+
+  const filteredHabits = useMemo(() => {
+    let next = habits;
+
+    if (timeFilter === "due-now") {
+      next = next.filter((habit) => habit.currentTimeOfDay !== null);
+    } else if (timeFilter === "anytime") {
+      next = next.filter((habit) => habit.timeOfDays.length === 0);
+    } else if (timeFilter !== "all") {
+      next = next.filter((habit) => habit.timeOfDays.some((period) => period.id === timeFilter));
+    }
+
+    if (areaFilter !== "all") {
+      next = next.filter((habit) => habit.areas.some((area) => area.id === areaFilter));
+    }
+
+    return next;
+  }, [areaFilter, habits, timeFilter]);
+
+  const groups = useMemo(() => groupTodayHabits(filteredHabits), [filteredHabits]);
 
   const emptyView = useMemo(() => {
     if (error) {
@@ -212,27 +254,71 @@ export default function Command() {
     );
   }, [error]);
 
+  const filteredEmptyView = useMemo(() => {
+    if (habits.length === 0) {
+      return emptyView;
+    }
+
+    return (
+      <List.EmptyView
+        icon={Icon.Filter}
+        title="No habits match filters"
+        description="Try switching to All Habits or clearing the area filter."
+        actions={
+          <ActionPanel>
+            <Action title="Show All Habits" onAction={() => setTimeFilter("all")} />
+            <Action title="Clear Area Filter" onAction={() => setAreaFilter("all")} />
+            <Action title="Refresh" onAction={() => setRefreshCounter((value) => value + 1)} />
+          </ActionPanel>
+        }
+      />
+    );
+  }, [emptyView, habits.length]);
+
   return (
     <List
       isLoading={isLoading}
       navigationTitle={cacheNotice ? "Today Habits (cached)" : "Today Habits"}
       searchBarPlaceholder="Search habits"
+      searchBarAccessory={
+        <>
+          <List.Dropdown tooltip="Filter by time of day" value={timeFilter} onChange={setTimeFilter}>
+            <List.Dropdown.Item title="Due Now" value="due-now" />
+            <List.Dropdown.Item title="All Habits" value="all" />
+            <List.Dropdown.Section title="Time of Day">
+              {timeOfDays.map((period) => (
+                <List.Dropdown.Item key={period.id} title={period.name} value={period.id} />
+              ))}
+              <List.Dropdown.Item title="Any time" value="anytime" />
+            </List.Dropdown.Section>
+          </List.Dropdown>
+          <List.Dropdown tooltip="Filter by area" value={areaFilter} onChange={setAreaFilter}>
+            <List.Dropdown.Item title="All Areas" value="all" />
+            {areas.map((area) => (
+              <List.Dropdown.Item key={area.id} title={area.name} value={area.id} />
+            ))}
+          </List.Dropdown>
+        </>
+      }
     >
-      {habits.length === 0 ? (
-        emptyView
+      {filteredHabits.length === 0 ? (
+        filteredEmptyView
       ) : (
         groups.map((group) => (
           <List.Section key={group.id} title={group.title} subtitle={group.subtitle}>
             {group.entries.map((habit) => {
               const detail = habitProgressLabel(habit);
-              const accessories = [{ text: statusLabel(habit.status), icon: statusIcon(habit.status) }];
+              const accessories: List.Item.Accessory[] = [
+                { text: statusLabel(habit.status), icon: { source: statusIcon(habit.status), tintColor: statusTintColor(habit.status) } },
+              ];
+              const rowTint = resolveRowTint(habit, rowColorMode);
 
               if (habit.currentStreak) {
-                accessories.push({ text: `${habit.currentStreak.length}d`, icon: Icon.Gauge });
+                accessories.push({ text: `${habit.currentStreak.length}d`, icon: streakIcon() });
               }
 
               if (habit.timeOfDays.length > 1) {
-                accessories.push({ text: `${habit.timeOfDays.length} slots`, icon: Icon.Clock });
+                accessories.push({ text: `${habit.timeOfDays.length} slots`, icon: { source: Icon.Clock } });
               }
 
               return (
@@ -240,7 +326,7 @@ export default function Command() {
                   key={habit.id}
                   title={habit.name}
                   subtitle={detail}
-                  icon={statusIcon(habit.status)}
+                  icon={rowTint ? { source: statusIcon(habit.status), tintColor: rowTint } : statusIcon(habit.status)}
                   accessories={accessories}
                   actions={
                     <ActionPanel title={habit.name}>
@@ -251,11 +337,18 @@ export default function Command() {
                           onAction={() => void mutateHabit(habit.id, habit.name, "undo")}
                         />
                       ) : (
-                        <Action
-                          title="Mark Completed"
-                          icon={Icon.CheckCircle}
-                          onAction={() => void mutateHabit(habit.id, habit.name, "complete")}
-                        />
+                        <>
+                          <Action
+                            title="Mark Completed"
+                            icon={{ source: Icon.CheckCircle, tintColor: "#20B26B" }}
+                            onAction={() => void mutateHabit(habit.id, habit.name, "complete")}
+                          />
+                          <Action
+                            title="Skip Today"
+                            icon={{ source: Icon.ArrowRight, tintColor: "#E8B200" }}
+                            onAction={() => void mutateHabit(habit.id, habit.name, "skip")}
+                          />
+                        </>
                       )}
                       <Action.Push
                         title="View Statistics"

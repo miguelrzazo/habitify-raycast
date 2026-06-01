@@ -22,12 +22,17 @@ import {
   habitStatusLabel,
   isHabitifyError,
   mergeJournalWithHabits,
+  resolveRowTint,
+  skipHabit,
+  statusTintColor,
+  streakIcon,
   TodayHabit,
   undoHabit,
 } from "./lib/habitify";
 
 interface Preferences {
   apiKey: string;
+  rowColorMode: "off" | "status" | "habit" | "area";
 }
 
 function statusIcon(status: TodayHabit["status"]) {
@@ -35,7 +40,7 @@ function statusIcon(status: TodayHabit["status"]) {
     case "completed":
       return Icon.CheckCircle;
     case "skipped":
-      return Icon.MinusCircle;
+      return Icon.ArrowRight;
     case "failed":
       return Icon.XMarkCircle;
     default:
@@ -47,7 +52,15 @@ function nextStatusForAction(action: "complete" | "undo") {
   return action === "complete" ? "completed" : "inprogress";
 }
 
-function AreaHabitsView({ area, apiKey }: { area: Area; apiKey: string }) {
+function AreaHabitsView({
+  area,
+  apiKey,
+  rowColorMode,
+}: {
+  area: Area;
+  apiKey: string;
+  rowColorMode: Preferences["rowColorMode"];
+}) {
   const [habits, setHabits] = useState<TodayHabit[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -135,26 +148,29 @@ function AreaHabitsView({ area, apiKey }: { area: Area; apiKey: string }) {
   }, []);
 
   const mutateHabit = useCallback(
-    async (habitId: string, habitName: string, action: "complete" | "undo") => {
+    async (habitId: string, habitName: string, action: "complete" | "undo" | "skip") => {
       const targetDate = formatLocalDate(new Date());
       const rollbackSnapshot = habitsRef.current;
       const toastPromise = showToast({
         style: Toast.Style.Animated,
-        title: action === "complete" ? "Completing habit…" : "Undoing habit…",
+        title:
+          action === "complete" ? "Completing habit…" : action === "skip" ? "Skipping habit…" : "Undoing habit…",
       });
 
-      updateHabitStatus(habitId, nextStatusForAction(action));
+      updateHabitStatus(habitId, action === "skip" ? "skipped" : nextStatusForAction(action));
 
       try {
         if (action === "complete") {
           await completeHabit(apiKey, habitId, targetDate);
+        } else if (action === "skip") {
+          await skipHabit(apiKey, habitId, targetDate);
         } else {
           await undoHabit(apiKey, habitId, targetDate);
         }
 
         const toast = await toastPromise;
         toast.style = Toast.Style.Success;
-        toast.title = action === "complete" ? "Habit completed" : "Habit undone";
+        toast.title = action === "complete" ? "Habit completed" : action === "skip" ? "Habit skipped" : "Habit undone";
         toast.message = habitName;
         void loadHabits({ silent: true });
       } catch (err) {
@@ -162,7 +178,12 @@ function AreaHabitsView({ area, apiKey }: { area: Area; apiKey: string }) {
 
         const toast = await toastPromise;
         toast.style = Toast.Style.Failure;
-        toast.title = action === "complete" ? "Could not complete habit" : "Could not undo habit";
+        toast.title =
+          action === "complete"
+            ? "Could not complete habit"
+            : action === "skip"
+              ? "Could not skip habit"
+              : "Could not undo habit";
         toast.message = isHabitifyError(err)
           ? `Habitify returned ${err.status}: ${err.message}`
           : err instanceof Error
@@ -215,14 +236,17 @@ function AreaHabitsView({ area, apiKey }: { area: Area; apiKey: string }) {
       ) : (
         habits.map((habit) => {
           const detail = habitProgressLabel(habit);
-          const accessories = [{ text: habitStatusLabel(habit.status), icon: statusIcon(habit.status) }];
+          const accessories: List.Item.Accessory[] = [
+            { text: habitStatusLabel(habit.status), icon: { source: statusIcon(habit.status), tintColor: statusTintColor(habit.status) } },
+          ];
+          const rowTint = resolveRowTint(habit, rowColorMode);
 
           if (habit.currentStreak) {
-            accessories.push({ text: `${habit.currentStreak.length}d`, icon: Icon.Gauge });
+            accessories.push({ text: `${habit.currentStreak.length}d`, icon: streakIcon() });
           }
 
           if (habit.currentTimeOfDay) {
-            accessories.push({ text: habit.currentTimeOfDay.name, icon: Icon.Clock });
+            accessories.push({ text: habit.currentTimeOfDay.name, icon: { source: Icon.Clock } });
           }
 
           return (
@@ -230,7 +254,7 @@ function AreaHabitsView({ area, apiKey }: { area: Area; apiKey: string }) {
               key={habit.id}
               title={habit.name}
               subtitle={detail}
-              icon={statusIcon(habit.status)}
+              icon={rowTint ? { source: statusIcon(habit.status), tintColor: rowTint } : statusIcon(habit.status)}
               accessories={accessories}
               actions={
                 <ActionPanel title={habit.name}>
@@ -241,11 +265,18 @@ function AreaHabitsView({ area, apiKey }: { area: Area; apiKey: string }) {
                       onAction={() => void mutateHabit(habit.id, habit.name, "undo")}
                     />
                   ) : (
-                    <Action
-                      title="Mark Completed"
-                      icon={Icon.CheckCircle}
-                      onAction={() => void mutateHabit(habit.id, habit.name, "complete")}
-                    />
+                    <>
+                      <Action
+                        title="Mark Completed"
+                        icon={{ source: Icon.CheckCircle, tintColor: "#20B26B" }}
+                        onAction={() => void mutateHabit(habit.id, habit.name, "complete")}
+                      />
+                      <Action
+                        title="Skip Today"
+                        icon={{ source: Icon.ArrowRight, tintColor: "#E8B200" }}
+                        onAction={() => void mutateHabit(habit.id, habit.name, "skip")}
+                      />
+                    </>
                   )}
                   <Action.Push
                     title="View Statistics"
@@ -277,7 +308,7 @@ function AreaHabitsView({ area, apiKey }: { area: Area; apiKey: string }) {
 }
 
 export default function Command() {
-  const { apiKey } = getPreferenceValues<Preferences>();
+  const { apiKey, rowColorMode } = getPreferenceValues<Preferences>();
   const [areas, setAreas] = useState<Area[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -360,15 +391,15 @@ export default function Command() {
           <List.Item
             key={area.id}
             title={area.name}
-            icon={Icon.House}
+            icon={area.colorHex ? { source: Icon.House, tintColor: area.colorHex } : Icon.House}
             accessories={[{ text: area.id.slice(0, 6), icon: Icon.Tag }]}
             actions={
               <ActionPanel title={area.name}>
-                <Action.Push
-                  title="Open Area Habits"
-                  icon={Icon.ArrowRight}
-                  target={<AreaHabitsView area={area} apiKey={apiKey} />}
-                />
+                  <Action.Push
+                    title="Open Area Habits"
+                    icon={Icon.ArrowRight}
+                    target={<AreaHabitsView area={area} apiKey={apiKey} rowColorMode={rowColorMode} />}
+                  />
                 <Action title="Refresh" icon={Icon.RotateClockwise} onAction={() => setRefreshCounter((value) => value + 1)} />
                 <Action.CopyToClipboard title="Copy Area ID" content={area.id} />
               </ActionPanel>

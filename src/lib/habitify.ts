@@ -1,5 +1,8 @@
+import { Color, Icon } from "@raycast/api";
+
 export type HabitStatus = "completed" | "skipped" | "failed" | "inprogress";
 export type HabitType = "good" | "bad";
+export type RowColorMode = "off" | "status" | "habit" | "area";
 
 export type TimeOfDay = {
   id: string;
@@ -45,6 +48,7 @@ export type Habit = {
   isArchived: boolean;
   logMethod: "manual" | "auto";
   customUnitName: string | null;
+  areas: Area[];
   timeOfDays: TimeOfDay[];
   goals: Array<{
     id: string;
@@ -87,6 +91,7 @@ export type Area = {
 };
 
 export type TodayHabit = JournalEntry & {
+  areas: Area[];
   timeOfDays: TimeOfDay[];
   currentTimeOfDay: TimeOfDay | null;
 };
@@ -185,6 +190,15 @@ function toQuery(query: HabitQuery) {
   };
 }
 
+function getHabitTimeOfDays(habit: Pick<Habit, "timeOfDays"> | Pick<TodayHabit, "timeOfDays"> | { timeOfDays?: TimeOfDay[] | null }) {
+  return Array.isArray(habit.timeOfDays) ? habit.timeOfDays : [];
+}
+
+function uniqueTimeOfDaysFromHabits(habits: Array<Pick<Habit, "timeOfDays"> | Pick<TodayHabit, "timeOfDays"> | { timeOfDays?: TimeOfDay[] | null }>) {
+  const pairs = habits.flatMap((habit) => getHabitTimeOfDays(habit).map((period) => [period.id, period] as const));
+  return Array.from(new Map(pairs).values());
+}
+
 export async function getTodayJournal(apiKey: string, date: string) {
   return requestJson<HabitifyResponse<JournalEntry[]>>(apiKey, "/habits/journal", {}, { date });
 }
@@ -194,6 +208,7 @@ export async function getHabits(apiKey: string, query: HabitQuery = {}) {
   let offset = query.offset ?? 0;
   const items: Habit[] = [];
   let total = Number.POSITIVE_INFINITY;
+  let previousOffset = -1;
 
   while (offset < total) {
     const response = await requestJson<HabitifyResponse<Habit[]>>(
@@ -203,17 +218,21 @@ export async function getHabits(apiKey: string, query: HabitQuery = {}) {
       toQuery({ ...query, limit: pageSize, offset }),
     );
 
-    items.push(...response.data);
+    const batch = Array.isArray(response.data) ? response.data : [];
+    items.push(...batch);
     total = response.pagination?.total ?? items.length;
 
-    if (response.data.length === 0) {
+    if (batch.length === 0) {
       break;
     }
 
-    const increment = response.pagination?.limit ?? pageSize;
+    const reportedLimit = response.pagination?.limit;
+    const increment =
+      typeof reportedLimit === "number" && Number.isFinite(reportedLimit) && reportedLimit > 0 ? reportedLimit : batch.length;
+    previousOffset = offset;
     offset += increment;
 
-    if (!response.pagination || offset >= total) {
+    if (offset <= previousOffset || !response.pagination || offset >= total) {
       break;
     }
   }
@@ -223,6 +242,13 @@ export async function getHabits(apiKey: string, query: HabitQuery = {}) {
 
 export async function completeHabit(apiKey: string, habitId: string, targetDate: string) {
   await requestJson(apiKey, `/habits/${habitId}/logs/complete`, {
+    method: "POST",
+    body: JSON.stringify({ targetDate }),
+  });
+}
+
+export async function skipHabit(apiKey: string, habitId: string, targetDate: string) {
+  await requestJson(apiKey, `/habits/${habitId}/logs/skip`, {
     method: "POST",
     body: JSON.stringify({ targetDate }),
   });
@@ -269,10 +295,75 @@ export function habitProgressLabel(entry: JournalEntry) {
     return habitStatusLabel(entry.status);
   }
 
-  const { current, target, unit } = entry.progress;
-  const roundedCurrent = Number.isInteger(current) ? current : Number(current.toFixed(1));
-  const roundedTarget = Number.isInteger(target) ? target : Number(target.toFixed(1));
-  return `${roundedCurrent}/${roundedTarget}${unit ? ` ${unit}` : ""}`;
+  return formatProgressLabel(entry.progress);
+}
+
+export function formatProgressValue(value: number) {
+  return Number.isInteger(value) ? `${value}` : Number(value.toFixed(1)).toString();
+}
+
+export function formatProgressLabel(progress: NonNullable<JournalEntry["progress"]>) {
+  const current = formatProgressValue(progress.current);
+  const target = formatProgressValue(progress.target);
+  const unit = progress.unit?.trim() ?? "";
+
+  return `${current}/${target}${unit ? ` ${unit}` : ""}`;
+}
+
+export function formatQuantity(value: number, unit?: string | null) {
+  const amount = formatProgressValue(value);
+  const normalizedUnit = unit?.trim() ?? "";
+  return `${amount}${normalizedUnit ? ` ${normalizedUnit}` : ""}`;
+}
+
+export function statusIcon(status: HabitStatus) {
+  switch (status) {
+    case "completed":
+      return Icon.CheckCircle;
+    case "skipped":
+      return Icon.ArrowRight;
+    case "failed":
+      return Icon.XMarkCircle;
+    default:
+      return Icon.Circle;
+  }
+}
+
+export function statusTintColor(status: HabitStatus) {
+  switch (status) {
+    case "completed":
+      return Color.Green;
+    case "skipped":
+      return Color.Yellow;
+    case "failed":
+      return Color.Red;
+    default:
+      return Color.PrimaryText;
+  }
+}
+
+export function streakIcon() {
+  return { source: Icon.Bolt, tintColor: Color.Orange };
+}
+
+export function resolveRowTint(
+  habit: Pick<JournalEntry, "status"> & { colorHex?: string | null; areas?: Area[] | null },
+  mode: RowColorMode,
+) {
+  if (mode === "off") {
+    return undefined;
+  }
+
+  if (mode === "status") {
+    return statusTintColor(habit.status);
+  }
+
+  if (mode === "area") {
+    const areaColor = habit.areas?.find((area) => area.colorHex)?.colorHex;
+    return areaColor ?? habit.colorHex ?? undefined;
+  }
+
+  return habit.colorHex ?? undefined;
 }
 
 function parseClockToMinutes(value: string) {
@@ -325,17 +416,29 @@ export function formatTimeOfDayRange(period: TimeOfDay) {
 
 export function mergeJournalWithHabits(journal: JournalEntry[], habits: Habit[], now = new Date()) {
   const habitMap = new Map(habits.map((habit) => [habit.id, habit]));
-  const allTimeOfDays = Array.from(new Map(habits.flatMap((habit) => habit.timeOfDays.map((period) => [period.id, period]))).values());
+  const allTimeOfDays = uniqueTimeOfDaysFromHabits(habits);
   const currentTimeOfDay = getCurrentTimeOfDay(allTimeOfDays, now);
 
   return journal.map((entry) => {
-    const timeOfDays = sortTimeOfDays(habitMap.get(entry.id)?.timeOfDays ?? []);
+    const habit = habitMap.get(entry.id);
+    const timeOfDays = sortTimeOfDays(getHabitTimeOfDays(habit ?? { timeOfDays: [] }));
     const entryCurrentTimeOfDay = currentTimeOfDay && timeOfDays.some((period) => period.id === currentTimeOfDay.id)
       ? currentTimeOfDay
       : null;
 
+    const normalizedProgress =
+      entry.progress && !entry.progress.unit
+        ? (() => {
+            const activeGoal = habit?.goals?.find((goal) => goal.isActive && goal.periodicity === entry.progress?.periodicity);
+            const unit = activeGoal?.unit || habit?.customUnitName || entry.progress.unit;
+            return { ...entry.progress, unit: unit || undefined };
+          })()
+        : entry.progress;
+
     return {
       ...entry,
+      progress: normalizedProgress,
+      areas: habit?.areas ?? [],
       timeOfDays,
       currentTimeOfDay: entryCurrentTimeOfDay,
     } satisfies TodayHabit;
@@ -343,9 +446,7 @@ export function mergeJournalWithHabits(journal: JournalEntry[], habits: Habit[],
 }
 
 export function groupTodayHabits(habits: TodayHabit[]) {
-  const currentPeriod = getCurrentTimeOfDay(
-    Array.from(new Map(habits.flatMap((habit) => habit.timeOfDays.map((period) => [period.id, period]))).values()),
-  );
+  const currentPeriod = getCurrentTimeOfDay(uniqueTimeOfDaysFromHabits(habits));
 
   type Accumulator = {
     period: TimeOfDay | null;

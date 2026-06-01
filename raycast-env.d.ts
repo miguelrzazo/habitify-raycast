@@ -9,7 +9,9 @@
 
 type ExtensionPreferences = {
   /** Habitify API Key - Create it in Habitify Settings > API. Required for all commands. */
-  "apiKey": string
+  "apiKey": string,
+  /** Row Color Mode - Choose how Raycast should tint habit rows. */
+  "rowColorMode": "status" | "habit" | "area" | "off"
 }
 
 /** Preferences accessible in all the extension's commands */
@@ -22,10 +24,10 @@ declare namespace Preferences {
   export type DueNow = ExtensionPreferences & {}
   /** Preferences accessible in the `current-time-of-day` command */
   export type CurrentTimeOfDay = ExtensionPreferences & {}
-  /** Preferences accessible in the `search` command */
-  export type Search = ExtensionPreferences & {}
   /** Preferences accessible in the `areas` command */
   export type Areas = ExtensionPreferences & {}
+  /** Preferences accessible in the `today-stats` command */
+  export type TodayStats = ExtensionPreferences & {}
 }
 
 declare namespace Arguments {
@@ -35,9 +37,9 @@ declare namespace Arguments {
   export type DueNow = {}
   /** Arguments passed to the `current-time-of-day` command */
   export type CurrentTimeOfDay = {}
-  /** Arguments passed to the `search` command */
-  export type Search = {}
   /** Arguments passed to the `areas` command */
   export type Areas = {}
+  /** Arguments passed to the `today-stats` command */
+  export type TodayStats = {}
 }
 

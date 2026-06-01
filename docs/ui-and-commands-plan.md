@@ -1,7 +1,7 @@
 # Habitify Raycast — UI Polish + New Commands Plan
 
 ## Document goal
-Polish the current *Today Habits* experience so it feels more like a Raycast-native dashboard, then add a small set of new commands that make Habitify faster to use from the keyboard.
+Polish the current *Today Habits* experience so it feels more like a Raycast-native dashboard, then keep the command surface focused on the highest-value Habitify flows.
 
 ## Current state review
 ### What already works
@@ -16,12 +16,12 @@ Polish the current *Today Habits* experience so it feels more like a Raycast-nat
 - Completed vs remaining habits are not clearly separated.
 - The list does not surface a high-level summary at a glance.
 - Empty/error states are serviceable, but not polished.
-- The extension only exposes one command, so the command palette surface is too narrow.
+- The extension only exposes a small set of commands, so the command palette surface can still be improved.
 
 ## Scope
 ### In scope for this iteration
 1. Improve the *Today Habits* command UI.
-2. Add a small set of new, high-value commands.
+2. Keep the existing commands lean and focused.
 3. Keep the changes compatible with the existing Habitify API v2 client.
 4. Reuse as much of the existing data-fetching layer as possible.
 
@@ -76,39 +76,17 @@ In `HabitDetail`:
 - group recent daily progress into a more readable layout
 - make the markdown easier to scan with short labels and spacing
 
-## New commands to add
-### Command A: `Today Overview`
-A lightweight dashboard command that focuses on summary, not action density.
+## Current command set
+### `Today Habits`
+Primary daily dashboard for completions, undo, and habit detail access.
 
-**Purpose:**
-- give a quick “how is today going?” snapshot
-- show counts, streak highlights, and the next action to take
+### `Due Now`
+Shows only habits scheduled for the current time of day.
 
-**Best UI shape:**
-- `List` with one summary section at top
-- a few featured habits below
-- strong emphasis on what is left to complete
+### `Current Time of Day`
+A focused view of the active time slot and its habits.
 
-**Value:**
-- useful when the user wants overview rather than a long habits list
-
-### Command B: `Search Habits`
-A global search command for finding any habit in Habitify.
-
-**Purpose:**
-- search by habit name
-- jump directly to detail/stats
-- optionally support complete/undo from search results
-
-**Best UI shape:**
-- `List` with dynamic filtering
-- search-as-you-type
-- items grouped by status or area if data is available
-
-**Value:**
-- turns the extension into a real command palette tool
-
-### Command C: `Habit Areas`
+### `Habit Areas`
 Browse habits by area.
 
 **Purpose:**
@@ -121,19 +99,6 @@ Browse habits by area.
 
 **Value:**
 - adds structure for users who organize habits by life domain
-
-### Command D: `Weekly Statistics`
-A stats-oriented command for the current week or recent period.
-
-**Purpose:**
-- summarize completions, failures, streaks, and consistency
-- give a higher-level view than the per-habit detail screen
-
-**Best UI shape:**
-- `Detail` with a concise summary and recent trends
-
-**Value:**
-- useful for checking consistency without opening each habit
 
 ## Recommended implementation order
 ### Task 1: Polish the Today Habits screen
@@ -153,7 +118,7 @@ A stats-oriented command for the current week or recent period.
 - tune ActionPanel ordering
 
 ### Task 2: Add a reusable Habit list model
-**Objective:** Avoid duplicating rendering logic when adding search/overview/areas.
+**Objective:** Avoid duplicating rendering logic across Today / Due Now / Areas.
 
 **Files likely touched:**
 - `src/lib/habitify.ts`
@@ -163,24 +128,11 @@ A stats-oriented command for the current week or recent period.
 - normalize Habitify responses into a simpler view model
 - derive labels like status, streak text, progress text, and sort order
 
-### Task 3: Add `Search Habits`
-**Objective:** Create a fast command to find any habit and jump to actions/details.
-
-**Files likely touched:**
-- `src/search-habits.tsx` or similar new command file
-- `package.json`
-- `src/components/HabitDetail.tsx`
-
-**Changes:**
-- fetch habits
-- filter by search query
-- push to detail or allow quick actions inline
-
-### Task 4: Add `Habit Areas`
+### Task 3: Keep `Habit Areas` polished
 **Objective:** Let the user browse habits grouped by area.
 
 **Files likely touched:**
-- `src/areas.tsx` or similar new command file
+- `src/areas.tsx`
 - `src/lib/habitify.ts`
 - `package.json`
 
@@ -189,7 +141,7 @@ A stats-oriented command for the current week or recent period.
 - render area list
 - push into habits within an area
 
-### Task 5: Add `Weekly Statistics`
+### Task 4: Consider `Weekly Statistics` later
 **Objective:** Provide a second stats surface that is broader than a single habit.
 
 **Files likely touched:**
@@ -202,11 +154,12 @@ A stats-oriented command for the current week or recent period.
 - show a concise trend-focused summary
 
 ## Suggested command set for MVP v2
-If the goal is the best balance of value and effort, ship these first:
-1. `Today Habits` — polished current screen
-2. `Search Habits` — quickest new utility win
-3. `Habit Areas` — good structure and navigation
-4. `Weekly Statistics` — optional if the API data supports it cleanly
+If the goal is the best balance of value and effort, keep the focus on:
+1. `Today Habits`
+2. `Due Now`
+3. `Current Time of Day`
+4. `Habit Areas`
+5. `Weekly Statistics` — optional if the API data supports it cleanly
 
 ## Verification checklist
 - [ ] `npm run lint`
@@ -214,10 +167,9 @@ If the goal is the best balance of value and effort, ship these first:
 - [ ] Raycast shows all commands in dev mode
 - [ ] Today list has clear summary + grouping
 - [ ] Complete/undo still work after UI changes
-- [ ] Search command finds habits quickly
 - [ ] Areas command loads data correctly
 - [ ] Detail view remains accessible from every entry point
 
 ## Recommendation
-Start with *Today Habits polish* plus *Search Habits*.
-That gives the user one better daily screen and one genuinely new command, without making the extension feel bloated.
+Start with *Today Habits polish* plus *reliability hardening*.
+That keeps the daily workflow fast while avoiding command-bloat.
