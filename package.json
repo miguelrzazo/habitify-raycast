@@ -25,6 +25,30 @@
       "title": "Today Habits",
       "description": "View and manage today's Habitify habits.",
       "mode": "view"
+    },
+    {
+      "name": "due-now",
+      "title": "Due Now",
+      "description": "Show only habits scheduled for the current time of day.",
+      "mode": "view"
+    },
+    {
+      "name": "current-time-of-day",
+      "title": "Current Time of Day",
+      "description": "Show habits scheduled for the current time slot.",
+      "mode": "view"
+    },
+    {
+      "name": "search",
+      "title": "Search Habits",
+      "description": "Find any habit and open its stats.",
+      "mode": "view"
+    },
+    {
+      "name": "areas",
+      "title": "Habit Areas",
+      "description": "Browse habits grouped by area.",
+      "mode": "view"
     }
   ],
   "scripts": {
