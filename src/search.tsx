@@ -16,7 +16,6 @@ import {
   completeHabit,
   getHabits,
   getTodayJournal,
-  groupTodayHabits,
   habitProgressLabel,
   habitStatusLabel,
   isHabitifyError,
@@ -40,10 +39,6 @@ function statusIcon(status: TodayHabit["status"]) {
     default:
       return Icon.Circle;
   }
-}
-
-function statusLabel(status: TodayHabit["status"]) {
-  return habitStatusLabel(status);
 }
 
 function nextStatusForAction(action: "complete" | "undo") {
@@ -82,9 +77,7 @@ export default function Command() {
         ]);
 
         if (cachedJournal && cachedHabits) {
-          const cachedMerged = mergeJournalWithHabits(cachedJournal.data.data, cachedHabits.data).filter(
-            (habit) => habit.currentTimeOfDay !== null,
-          );
+          const cachedMerged = mergeJournalWithHabits(cachedJournal.data.data, cachedHabits.data);
           setHabits(cachedMerged);
           const cachedAt = latestCacheTimestamp(cachedJournal.savedAt, cachedHabits.savedAt);
           setCacheNotice(cachedAt ? `Showing cached data from ${formatCacheTimestamp(cachedAt)}` : "Showing cached data");
@@ -113,7 +106,7 @@ export default function Command() {
           await writeCache(habitsCacheKey, habitsResult.value);
         }
 
-        const merged = mergeJournalWithHabits(journalData, habitCatalog).filter((habit) => habit.currentTimeOfDay !== null);
+        const merged = mergeJournalWithHabits(journalData, habitCatalog);
         setHabits(merged);
 
         const usedCache = journalResult.status !== "fulfilled" || habitsResult.status !== "fulfilled";
@@ -179,8 +172,6 @@ export default function Command() {
     [apiKey, loadHabits, updateHabitStatus],
   );
 
-  const groups = useMemo(() => groupTodayHabits(habits), [habits]);
-
   const emptyView = useMemo(() => {
     if (error) {
       return (
@@ -200,9 +191,9 @@ export default function Command() {
 
     return (
       <List.EmptyView
-        icon={Icon.House}
-        title="No habits found"
-        description="Habitify did not return any habits for today."
+        icon={Icon.MagnifyingGlass}
+        title="No habits to show"
+        description="Try a different search or refresh the list."
         actions={
           <ActionPanel>
             <Action title="Refresh" onAction={() => setRefreshCounter((value) => value + 1)} />
@@ -215,74 +206,70 @@ export default function Command() {
   return (
     <List
       isLoading={isLoading}
-      navigationTitle={cacheNotice ? "Today Habits (cached)" : "Today Habits"}
+      navigationTitle={cacheNotice ? "Search Habits (cached)" : "Search Habits"}
       searchBarPlaceholder="Search habits"
     >
       {habits.length === 0 ? (
         emptyView
       ) : (
-        groups.map((group) => (
-          <List.Section key={group.id} title={group.title} subtitle={group.subtitle}>
-            {group.entries.map((habit) => {
-              const detail = habitProgressLabel(habit);
-              const accessories = [{ text: statusLabel(habit.status), icon: statusIcon(habit.status) }];
+        habits.map((habit) => {
+          const detail = habitProgressLabel(habit);
+          const accessories = [{ text: habitStatusLabel(habit.status), icon: statusIcon(habit.status) }];
 
-              if (habit.currentStreak) {
-                accessories.push({ text: `${habit.currentStreak.length}d`, icon: Icon.Gauge });
-              }
+          if (habit.currentStreak) {
+            accessories.push({ text: `${habit.currentStreak.length}d`, icon: Icon.Gauge });
+          }
 
-              if (habit.timeOfDays.length > 1) {
-                accessories.push({ text: `${habit.timeOfDays.length} slots`, icon: Icon.Clock });
-              }
+          if (habit.currentTimeOfDay) {
+            accessories.push({ text: habit.currentTimeOfDay.name, icon: Icon.Clock });
+          }
 
-              return (
-                <List.Item
-                  key={habit.id}
-                  title={habit.name}
-                  subtitle={detail}
-                  icon={statusIcon(habit.status)}
-                  accessories={accessories}
-                  actions={
-                    <ActionPanel title={habit.name}>
-                      {habit.status === "completed" ? (
-                        <Action
-                          title="Undo Today"
-                          icon={Icon.ArrowCounterClockwise}
-                          onAction={() => void mutateHabit(habit.id, habit.name, "undo")}
-                        />
-                      ) : (
-                        <Action
-                          title="Mark Completed"
-                          icon={Icon.CheckCircle}
-                          onAction={() => void mutateHabit(habit.id, habit.name, "complete")}
-                        />
-                      )}
-                      <Action.Push
-                        title="View Statistics"
-                        icon={Icon.BarChart}
-                        target={
-                          <HabitDetail
-                            apiKey={apiKey}
-                            habitId={habit.id}
-                            habitName={habit.name}
-                            onRefresh={() => setRefreshCounter((value) => value + 1)}
-                          />
-                        }
+          return (
+            <List.Item
+              key={habit.id}
+              title={habit.name}
+              subtitle={detail}
+              icon={statusIcon(habit.status)}
+              accessories={accessories}
+              actions={
+                <ActionPanel title={habit.name}>
+                  {habit.status === "completed" ? (
+                    <Action
+                      title="Undo Today"
+                      icon={Icon.ArrowCounterClockwise}
+                      onAction={() => void mutateHabit(habit.id, habit.name, "undo")}
+                    />
+                  ) : (
+                    <Action
+                      title="Mark Completed"
+                      icon={Icon.CheckCircle}
+                      onAction={() => void mutateHabit(habit.id, habit.name, "complete")}
+                    />
+                  )}
+                  <Action.Push
+                    title="View Statistics"
+                    icon={Icon.BarChart}
+                    target={
+                      <HabitDetail
+                        apiKey={apiKey}
+                        habitId={habit.id}
+                        habitName={habit.name}
+                        onRefresh={() => setRefreshCounter((value) => value + 1)}
                       />
-                      <Action
-                        title="Refresh"
-                        icon={Icon.RotateClockwise}
-                        onAction={() => setRefreshCounter((value) => value + 1)}
-                        shortcut={{ modifiers: ["cmd"], key: "r" }}
-                      />
-                      <Action.CopyToClipboard title="Copy Habit ID" content={habit.id} />
-                    </ActionPanel>
-                  }
-                />
-              );
-            })}
-          </List.Section>
-        ))
+                    }
+                  />
+                  <Action
+                    title="Refresh"
+                    icon={Icon.RotateClockwise}
+                    onAction={() => setRefreshCounter((value) => value + 1)}
+                    shortcut={{ modifiers: ["cmd"], key: "r" }}
+                  />
+                  <Action.CopyToClipboard title="Copy Habit ID" content={habit.id} />
+                </ActionPanel>
+              }
+            />
+          );
+        })
       )}
     </List>
   );

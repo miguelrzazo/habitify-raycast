@@ -13,10 +13,11 @@ import HabitDetail from "./components/HabitDetail";
 import { formatLocalDate } from "./lib/date";
 import { formatCacheTimestamp, habitifyCacheKeys, latestCacheTimestamp, readCache, writeCache } from "./lib/cache";
 import {
+  Area,
   completeHabit,
+  getAreas,
   getHabits,
   getTodayJournal,
-  groupTodayHabits,
   habitProgressLabel,
   habitStatusLabel,
   isHabitifyError,
@@ -42,16 +43,11 @@ function statusIcon(status: TodayHabit["status"]) {
   }
 }
 
-function statusLabel(status: TodayHabit["status"]) {
-  return habitStatusLabel(status);
-}
-
 function nextStatusForAction(action: "complete" | "undo") {
   return action === "complete" ? "completed" : "inprogress";
 }
 
-export default function Command() {
-  const { apiKey } = getPreferenceValues<Preferences>();
+function AreaHabitsView({ area, apiKey }: { area: Area; apiKey: string }) {
   const [habits, setHabits] = useState<TodayHabit[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -74,7 +70,7 @@ export default function Command() {
       try {
         const today = formatLocalDate(new Date());
         const journalCacheKey = habitifyCacheKeys.todayJournal(today);
-        const habitsCacheKey = habitifyCacheKeys.activeHabits;
+        const habitsCacheKey = habitifyCacheKeys.habitsByArea(area.id);
 
         const [cachedJournal, cachedHabits] = await Promise.all([
           readCache<Awaited<ReturnType<typeof getTodayJournal>>>(journalCacheKey),
@@ -82,9 +78,7 @@ export default function Command() {
         ]);
 
         if (cachedJournal && cachedHabits) {
-          const cachedMerged = mergeJournalWithHabits(cachedJournal.data.data, cachedHabits.data).filter(
-            (habit) => habit.currentTimeOfDay !== null,
-          );
+          const cachedMerged = mergeJournalWithHabits(cachedJournal.data.data, cachedHabits.data);
           setHabits(cachedMerged);
           const cachedAt = latestCacheTimestamp(cachedJournal.savedAt, cachedHabits.savedAt);
           setCacheNotice(cachedAt ? `Showing cached data from ${formatCacheTimestamp(cachedAt)}` : "Showing cached data");
@@ -92,7 +86,7 @@ export default function Command() {
 
         const [journalResult, habitsResult] = await Promise.allSettled([
           getTodayJournal(apiKey, today),
-          getHabits(apiKey, { archived: false }),
+          getHabits(apiKey, { archived: false, areaId: area.id }),
         ]);
 
         const journalData = journalResult.status === "fulfilled" ? journalResult.value.data : cachedJournal?.data.data;
@@ -113,7 +107,7 @@ export default function Command() {
           await writeCache(habitsCacheKey, habitsResult.value);
         }
 
-        const merged = mergeJournalWithHabits(journalData, habitCatalog).filter((habit) => habit.currentTimeOfDay !== null);
+        const merged = mergeJournalWithHabits(journalData, habitCatalog);
         setHabits(merged);
 
         const usedCache = journalResult.status !== "fulfilled" || habitsResult.status !== "fulfilled";
@@ -122,14 +116,14 @@ export default function Command() {
           setCacheNotice(cachedAt ? `Showing cached data from ${formatCacheTimestamp(cachedAt)}` : "Showing cached data");
         }
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Unable to load Habitify habits.");
+        setError(err instanceof Error ? err.message : "Unable to load area habits.");
       } finally {
         if (!silent) {
           setIsLoading(false);
         }
       }
     },
-    [apiKey],
+    [apiKey, area.id],
   );
 
   useEffect(() => {
@@ -179,14 +173,12 @@ export default function Command() {
     [apiKey, loadHabits, updateHabitStatus],
   );
 
-  const groups = useMemo(() => groupTodayHabits(habits), [habits]);
-
   const emptyView = useMemo(() => {
     if (error) {
       return (
         <List.EmptyView
           icon={Icon.ExclamationMark}
-          title="Unable to load Habitify"
+          title="Unable to load area habits"
           description={error}
           actions={
             <ActionPanel>
@@ -201,8 +193,151 @@ export default function Command() {
     return (
       <List.EmptyView
         icon={Icon.House}
-        title="No habits found"
-        description="Habitify did not return any habits for today."
+        title={`No habits in ${area.name}`}
+        description="This area does not have any active habits right now."
+        actions={
+          <ActionPanel>
+            <Action title="Refresh" onAction={() => setRefreshCounter((value) => value + 1)} />
+          </ActionPanel>
+        }
+      />
+    );
+  }, [area.name, error]);
+
+  return (
+    <List
+      isLoading={isLoading}
+      navigationTitle={cacheNotice ? `${area.name} (cached)` : area.name}
+      searchBarPlaceholder={`Search ${area.name.toLowerCase()} habits`}
+    >
+      {habits.length === 0 ? (
+        emptyView
+      ) : (
+        habits.map((habit) => {
+          const detail = habitProgressLabel(habit);
+          const accessories = [{ text: habitStatusLabel(habit.status), icon: statusIcon(habit.status) }];
+
+          if (habit.currentStreak) {
+            accessories.push({ text: `${habit.currentStreak.length}d`, icon: Icon.Gauge });
+          }
+
+          if (habit.currentTimeOfDay) {
+            accessories.push({ text: habit.currentTimeOfDay.name, icon: Icon.Clock });
+          }
+
+          return (
+            <List.Item
+              key={habit.id}
+              title={habit.name}
+              subtitle={detail}
+              icon={statusIcon(habit.status)}
+              accessories={accessories}
+              actions={
+                <ActionPanel title={habit.name}>
+                  {habit.status === "completed" ? (
+                    <Action
+                      title="Undo Today"
+                      icon={Icon.ArrowCounterClockwise}
+                      onAction={() => void mutateHabit(habit.id, habit.name, "undo")}
+                    />
+                  ) : (
+                    <Action
+                      title="Mark Completed"
+                      icon={Icon.CheckCircle}
+                      onAction={() => void mutateHabit(habit.id, habit.name, "complete")}
+                    />
+                  )}
+                  <Action.Push
+                    title="View Statistics"
+                    icon={Icon.BarChart}
+                    target={
+                      <HabitDetail
+                        apiKey={apiKey}
+                        habitId={habit.id}
+                        habitName={habit.name}
+                        onRefresh={() => setRefreshCounter((value) => value + 1)}
+                      />
+                    }
+                  />
+                  <Action
+                    title="Refresh"
+                    icon={Icon.RotateClockwise}
+                    onAction={() => setRefreshCounter((value) => value + 1)}
+                    shortcut={{ modifiers: ["cmd"], key: "r" }}
+                  />
+                  <Action.CopyToClipboard title="Copy Habit ID" content={habit.id} />
+                </ActionPanel>
+              }
+            />
+          );
+        })
+      )}
+    </List>
+  );
+}
+
+export default function Command() {
+  const { apiKey } = getPreferenceValues<Preferences>();
+  const [areas, setAreas] = useState<Area[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [refreshCounter, setRefreshCounter] = useState(0);
+  const [cacheNotice, setCacheNotice] = useState<string | null>(null);
+
+  const loadAreas = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const cachedAreas = await readCache<Area[]>(habitifyCacheKeys.areas);
+      if (cachedAreas) {
+        setAreas(cachedAreas.data);
+        setCacheNotice(`Showing cached data from ${formatCacheTimestamp(cachedAreas.savedAt)}`);
+      }
+
+      const response = await getAreas(apiKey);
+      setAreas(response.data);
+      await writeCache(habitifyCacheKeys.areas, response.data);
+      setCacheNotice(null);
+    } catch (err) {
+      const cachedAreas = await readCache<Area[]>(habitifyCacheKeys.areas);
+      if (cachedAreas) {
+        setAreas(cachedAreas.data);
+        setCacheNotice(`Showing cached data from ${formatCacheTimestamp(cachedAreas.savedAt)}`);
+      } else {
+        setError(err instanceof Error ? err.message : "Unable to load Habitify areas.");
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  }, [apiKey]);
+
+  useEffect(() => {
+    void loadAreas();
+  }, [loadAreas, refreshCounter]);
+
+  const emptyView = useMemo(() => {
+    if (error) {
+      return (
+        <List.EmptyView
+          icon={Icon.ExclamationMark}
+          title="Unable to load Habitify areas"
+          description={error}
+          actions={
+            <ActionPanel>
+              <Action title="Open Extension Preferences" onAction={openExtensionPreferences} />
+              <Action title="Retry" onAction={() => setRefreshCounter((value) => value + 1)} />
+            </ActionPanel>
+          }
+        />
+      );
+    }
+
+    return (
+      <List.EmptyView
+        icon={Icon.House}
+        title="No areas found"
+        description="Create areas in Habitify to organize your habits."
         actions={
           <ActionPanel>
             <Action title="Refresh" onAction={() => setRefreshCounter((value) => value + 1)} />
@@ -215,73 +350,30 @@ export default function Command() {
   return (
     <List
       isLoading={isLoading}
-      navigationTitle={cacheNotice ? "Today Habits (cached)" : "Today Habits"}
-      searchBarPlaceholder="Search habits"
+      navigationTitle={cacheNotice ? "Habit Areas (cached)" : "Habit Areas"}
+      searchBarPlaceholder="Search areas"
     >
-      {habits.length === 0 ? (
+      {areas.length === 0 ? (
         emptyView
       ) : (
-        groups.map((group) => (
-          <List.Section key={group.id} title={group.title} subtitle={group.subtitle}>
-            {group.entries.map((habit) => {
-              const detail = habitProgressLabel(habit);
-              const accessories = [{ text: statusLabel(habit.status), icon: statusIcon(habit.status) }];
-
-              if (habit.currentStreak) {
-                accessories.push({ text: `${habit.currentStreak.length}d`, icon: Icon.Gauge });
-              }
-
-              if (habit.timeOfDays.length > 1) {
-                accessories.push({ text: `${habit.timeOfDays.length} slots`, icon: Icon.Clock });
-              }
-
-              return (
-                <List.Item
-                  key={habit.id}
-                  title={habit.name}
-                  subtitle={detail}
-                  icon={statusIcon(habit.status)}
-                  accessories={accessories}
-                  actions={
-                    <ActionPanel title={habit.name}>
-                      {habit.status === "completed" ? (
-                        <Action
-                          title="Undo Today"
-                          icon={Icon.ArrowCounterClockwise}
-                          onAction={() => void mutateHabit(habit.id, habit.name, "undo")}
-                        />
-                      ) : (
-                        <Action
-                          title="Mark Completed"
-                          icon={Icon.CheckCircle}
-                          onAction={() => void mutateHabit(habit.id, habit.name, "complete")}
-                        />
-                      )}
-                      <Action.Push
-                        title="View Statistics"
-                        icon={Icon.BarChart}
-                        target={
-                          <HabitDetail
-                            apiKey={apiKey}
-                            habitId={habit.id}
-                            habitName={habit.name}
-                            onRefresh={() => setRefreshCounter((value) => value + 1)}
-                          />
-                        }
-                      />
-                      <Action
-                        title="Refresh"
-                        icon={Icon.RotateClockwise}
-                        onAction={() => setRefreshCounter((value) => value + 1)}
-                        shortcut={{ modifiers: ["cmd"], key: "r" }}
-                      />
-                      <Action.CopyToClipboard title="Copy Habit ID" content={habit.id} />
-                    </ActionPanel>
-                  }
+        areas.map((area) => (
+          <List.Item
+            key={area.id}
+            title={area.name}
+            icon={Icon.House}
+            accessories={[{ text: area.id.slice(0, 6), icon: Icon.Tag }]}
+            actions={
+              <ActionPanel title={area.name}>
+                <Action.Push
+                  title="Open Area Habits"
+                  icon={Icon.ArrowRight}
+                  target={<AreaHabitsView area={area} apiKey={apiKey} />}
                 />
-              );
-            })}
-          </List.Section>
+                <Action title="Refresh" icon={Icon.RotateClockwise} onAction={() => setRefreshCounter((value) => value + 1)} />
+                <Action.CopyToClipboard title="Copy Area ID" content={area.id} />
+              </ActionPanel>
+            }
+          />
         ))
       )}
     </List>
