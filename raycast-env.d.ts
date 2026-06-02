@@ -20,8 +20,6 @@ declare type Preferences = ExtensionPreferences
 declare namespace Preferences {
   /** Preferences accessible in the `index` command */
   export type Index = ExtensionPreferences & {}
-  /** Preferences accessible in the `due-now` command */
-  export type DueNow = ExtensionPreferences & {}
   /** Preferences accessible in the `current-time-of-day` command */
   export type CurrentTimeOfDay = ExtensionPreferences & {}
   /** Preferences accessible in the `areas` command */
@@ -33,8 +31,6 @@ declare namespace Preferences {
 declare namespace Arguments {
   /** Arguments passed to the `index` command */
   export type Index = {}
-  /** Arguments passed to the `due-now` command */
-  export type DueNow = {}
   /** Arguments passed to the `current-time-of-day` command */
   export type CurrentTimeOfDay = {}
   /** Arguments passed to the `areas` command */

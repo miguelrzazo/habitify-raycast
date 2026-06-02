@@ -94,6 +94,16 @@ export type TodayHabit = JournalEntry & {
   areas: Area[];
   timeOfDays: TimeOfDay[];
   currentTimeOfDay: TimeOfDay | null;
+  goalPeriodicity: "daily" | "weekly" | "monthly" | "yearly";
+};
+
+export type HabitLog = {
+  id: string;
+  type: "manual" | "auto";
+  date: string;
+  unitSymbol: string;
+  value: number;
+  localLastModifiedDate: number;
 };
 
 export type TodayHabitGroup = {
@@ -248,7 +258,7 @@ export async function completeHabit(apiKey: string, habitId: string, targetDate:
 }
 
 export async function skipHabit(apiKey: string, habitId: string, targetDate: string) {
-  await requestJson(apiKey, `/habits/${habitId}/logs/skip`, {
+  await requestJson(apiKey, `/habits/${habitId}/logs/skipped`, {
     method: "POST",
     body: JSON.stringify({ targetDate }),
   });
@@ -259,6 +269,26 @@ export async function undoHabit(apiKey: string, habitId: string, targetDate: str
     method: "POST",
     body: JSON.stringify({ targetDate }),
   });
+}
+
+export async function logHabitValue(apiKey: string, habitId: string, value: number, unitSymbol: string, targetDate: string) {
+  await requestJson(apiKey, `/habits/${habitId}/logs`, {
+    method: "POST",
+    body: JSON.stringify({ value, unitSymbol, targetDate }),
+  });
+}
+
+export async function fetchHabitLogs(apiKey: string, habitId: string, date: string) {
+  try {
+    const result = await requestJson<HabitifyResponse<HabitLog[]>>(apiKey, `/habits/${habitId}/logs`, {}, { date });
+    return Array.isArray(result.data) ? result.data : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function deleteHabitLog(apiKey: string, habitId: string, logId: string) {
+  await requestJson(apiKey, `/habits/${habitId}/logs/${logId}`, { method: "DELETE" });
 }
 
 export async function getHabit(apiKey: string, habitId: string) {
@@ -435,14 +465,34 @@ export function mergeJournalWithHabits(journal: JournalEntry[], habits: Habit[],
           })()
         : entry.progress;
 
+    const goalPeriodicity: TodayHabit["goalPeriodicity"] =
+      entry.progress?.periodicity ??
+      habit?.goals?.find((g) => g.isActive)?.periodicity ??
+      "daily";
+
     return {
       ...entry,
+      colorHex: habit?.colorHex ?? entry.colorHex,
+      icon: habit?.icon ?? entry.icon,
       progress: normalizedProgress,
       areas: habit?.areas ?? [],
       timeOfDays,
       currentTimeOfDay: entryCurrentTimeOfDay,
+      goalPeriodicity,
     } satisfies TodayHabit;
   });
+}
+
+export function splitHabitsByPeriodicity(habits: TodayHabit[]) {
+  const daily: TodayHabit[] = [];
+  const weekly: TodayHabit[] = [];
+  const monthly: TodayHabit[] = [];
+  for (const h of habits) {
+    if (h.goalPeriodicity === "weekly") weekly.push(h);
+    else if (h.goalPeriodicity === "monthly" || h.goalPeriodicity === "yearly") monthly.push(h);
+    else daily.push(h);
+  }
+  return { daily, weekly, monthly };
 }
 
 export function groupTodayHabits(habits: TodayHabit[]) {

@@ -13,6 +13,7 @@ import {
   getHabits,
   getTodayJournal,
   habitStatusLabel,
+  Habit,
   mergeJournalWithHabits,
   statusIcon,
   statusTintColor,
@@ -43,9 +44,42 @@ function computeSummary(habits: TodayHabit[]): Summary {
   );
 }
 
+function getDatesForWeek(): string[] {
+  const today = new Date();
+  const day = today.getDay();
+  const monday = new Date(today);
+  monday.setDate(today.getDate() - ((day === 0 ? 7 : day) - 1));
+  const dates: string[] = [];
+  const current = new Date(monday);
+  while (current <= today) {
+    dates.push(formatLocalDate(current));
+    current.setDate(current.getDate() + 1);
+  }
+  return dates;
+}
+
+function getDatesForMonth(): string[] {
+  const today = new Date();
+  const first = new Date(today.getFullYear(), today.getMonth(), 1);
+  const dates: string[] = [];
+  const current = new Date(first);
+  while (current <= today) {
+    dates.push(formatLocalDate(current));
+    current.setDate(current.getDate() + 1);
+  }
+  return dates;
+}
+
+async function fetchMultipleJournals(apiKey: string, dates: string[], habitCatalog: Habit[]): Promise<TodayHabit[]> {
+  const results = await Promise.allSettled(dates.map((d) => getTodayJournal(apiKey, d)));
+  return results.flatMap((r) => (r.status === "fulfilled" ? mergeJournalWithHabits(r.value.data, habitCatalog) : []));
+}
+
 export default function Command() {
   const { apiKey } = getPreferenceValues<Preferences>();
   const [habits, setHabits] = useState<TodayHabit[]>([]);
+  const [weekHabits, setWeekHabits] = useState<TodayHabit[]>([]);
+  const [monthHabits, setMonthHabits] = useState<TodayHabit[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshCounter, setRefreshCounter] = useState(0);
@@ -95,13 +129,25 @@ export default function Command() {
         await writeCache(habitsCacheKey, habitsResult.value);
       }
 
-      setHabits(mergeJournalWithHabits(journalData, habitCatalog));
+      const merged = mergeJournalWithHabits(journalData, habitCatalog);
+      setHabits(merged);
 
       const usedCache = journalResult.status !== "fulfilled" || habitsResult.status !== "fulfilled";
       if (usedCache) {
         const cachedAt = latestCacheTimestamp(cachedJournal?.savedAt, cachedHabits?.savedAt);
         setCacheNotice(cachedAt ? `Showing cached data from ${formatCacheTimestamp(cachedAt)}` : "Showing cached data");
       }
+
+      const weekDates = getDatesForWeek().filter((d) => d !== today);
+      const monthDates = getDatesForMonth().filter((d) => d !== today);
+
+      const [weekEntries, monthEntries] = await Promise.all([
+        fetchMultipleJournals(apiKey, weekDates, habitCatalog),
+        fetchMultipleJournals(apiKey, monthDates, habitCatalog),
+      ]);
+
+      setWeekHabits([...merged, ...weekEntries]);
+      setMonthHabits([...merged, ...monthEntries]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to load Habitify statistics.");
     } finally {
@@ -114,7 +160,13 @@ export default function Command() {
   }, [load, refreshCounter]);
 
   const summary = useMemo(() => computeSummary(habits), [habits]);
+  const weekSummary = useMemo(() => computeSummary(weekHabits), [weekHabits]);
+  const monthSummary = useMemo(() => computeSummary(monthHabits), [monthHabits]);
+
   const completionRate = summary.total > 0 ? Math.round((summary.completed / summary.total) * 100) : 0;
+  const weekRate = weekSummary.total > 0 ? Math.round((weekSummary.completed / weekSummary.total) * 100) : 0;
+  const monthRate = monthSummary.total > 0 ? Math.round((monthSummary.completed / monthSummary.total) * 100) : 0;
+
   const summaryText = `Today: ${summary.completed}/${summary.total} completed, ${summary.inprogress} in progress, ${summary.skipped} skipped, ${summary.failed} failed.`;
 
   const streakHabits = useMemo(() => {
@@ -182,6 +234,16 @@ export default function Command() {
     );
   }, [error]);
 
+  function sharedActions() {
+    return (
+      <ActionPanel>
+        <Action title="Refresh" icon={Icon.RotateClockwise} onAction={() => setRefreshCounter((value) => value + 1)} />
+        <Action.CopyToClipboard title="Copy Summary" content={summaryText} />
+        <Action title="Open Extension Preferences" icon={Icon.Gear} onAction={openExtensionPreferences} />
+      </ActionPanel>
+    );
+  }
+
   const navigationTitle = cacheNotice ? "Today Stats (cached)" : "Today Stats";
 
   return (
@@ -190,65 +252,72 @@ export default function Command() {
         emptyView
       ) : (
         <>
-          <List.Section title="Overview" subtitle={`${completionRate}% completed`}>
+          <List.Section title="Today" subtitle={`${completionRate}% completed`}>
             <List.Item
               title="Completed"
-              actions={
-                <ActionPanel>
-                  <Action title="Refresh" icon={Icon.RotateClockwise} onAction={() => setRefreshCounter((value) => value + 1)} />
-                  <Action.CopyToClipboard title="Copy Summary" content={summaryText} />
-                  <Action title="Open Extension Preferences" icon={Icon.Gear} onAction={openExtensionPreferences} />
-                </ActionPanel>
-              }
+              actions={sharedActions()}
               accessories={[{ text: `${summary.completed}/${summary.total}`, icon: { source: statusIcon("completed"), tintColor: statusTintColor("completed") } }]}
             />
             <List.Item
               title="In Progress"
-              actions={
-                <ActionPanel>
-                  <Action title="Refresh" icon={Icon.RotateClockwise} onAction={() => setRefreshCounter((value) => value + 1)} />
-                  <Action.CopyToClipboard title="Copy Summary" content={summaryText} />
-                  <Action title="Open Extension Preferences" icon={Icon.Gear} onAction={openExtensionPreferences} />
-                </ActionPanel>
-              }
+              actions={sharedActions()}
               accessories={[{ text: `${summary.inprogress}/${summary.total}`, icon: { source: statusIcon("inprogress"), tintColor: statusTintColor("inprogress") } }]}
             />
             <List.Item
               title="Skipped"
-              actions={
-                <ActionPanel>
-                  <Action title="Refresh" icon={Icon.RotateClockwise} onAction={() => setRefreshCounter((value) => value + 1)} />
-                  <Action.CopyToClipboard title="Copy Summary" content={summaryText} />
-                  <Action title="Open Extension Preferences" icon={Icon.Gear} onAction={openExtensionPreferences} />
-                </ActionPanel>
-              }
+              actions={sharedActions()}
               accessories={[{ text: `${summary.skipped}/${summary.total}`, icon: { source: statusIcon("skipped"), tintColor: statusTintColor("skipped") } }]}
             />
             <List.Item
               title="Failed"
-              actions={
-                <ActionPanel>
-                  <Action title="Refresh" icon={Icon.RotateClockwise} onAction={() => setRefreshCounter((value) => value + 1)} />
-                  <Action.CopyToClipboard title="Copy Summary" content={summaryText} />
-                  <Action title="Open Extension Preferences" icon={Icon.Gear} onAction={openExtensionPreferences} />
-                </ActionPanel>
-              }
+              actions={sharedActions()}
               accessories={[{ text: `${summary.failed}/${summary.total}`, icon: { source: statusIcon("failed"), tintColor: statusTintColor("failed") } }]}
             />
           </List.Section>
 
+          {weekHabits.length > 0 && (
+            <List.Section title="This Week" subtitle={`${weekRate}% completed`}>
+              <List.Item
+                title="Completed"
+                actions={sharedActions()}
+                accessories={[{ text: `${weekSummary.completed}/${weekSummary.total}`, icon: { source: statusIcon("completed"), tintColor: statusTintColor("completed") } }]}
+              />
+              <List.Item
+                title="Skipped"
+                actions={sharedActions()}
+                accessories={[{ text: `${weekSummary.skipped}`, icon: { source: statusIcon("skipped"), tintColor: statusTintColor("skipped") } }]}
+              />
+              <List.Item
+                title="Failed"
+                actions={sharedActions()}
+                accessories={[{ text: `${weekSummary.failed}`, icon: { source: statusIcon("failed"), tintColor: statusTintColor("failed") } }]}
+              />
+            </List.Section>
+          )}
+
+          {monthHabits.length > 0 && (
+            <List.Section title="This Month" subtitle={`${monthRate}% completed`}>
+              <List.Item
+                title="Completed"
+                actions={sharedActions()}
+                accessories={[{ text: `${monthSummary.completed}/${monthSummary.total}`, icon: { source: statusIcon("completed"), tintColor: statusTintColor("completed") } }]}
+              />
+              <List.Item
+                title="Skipped"
+                actions={sharedActions()}
+                accessories={[{ text: `${monthSummary.skipped}`, icon: { source: statusIcon("skipped"), tintColor: statusTintColor("skipped") } }]}
+              />
+              <List.Item
+                title="Failed"
+                actions={sharedActions()}
+                accessories={[{ text: `${monthSummary.failed}`, icon: { source: statusIcon("failed"), tintColor: statusTintColor("failed") } }]}
+              />
+            </List.Section>
+          )}
+
           <List.Section title="Streaks" subtitle={streakHabits.length ? `${streakHabits.length} active` : "None"}>
             {streakHabits.length === 0 ? (
-              <List.Item
-                title="No active streaks"
-                actions={
-                  <ActionPanel>
-                    <Action title="Refresh" icon={Icon.RotateClockwise} onAction={() => setRefreshCounter((value) => value + 1)} />
-                    <Action.CopyToClipboard title="Copy Summary" content={summaryText} />
-                    <Action title="Open Extension Preferences" icon={Icon.Gear} onAction={openExtensionPreferences} />
-                  </ActionPanel>
-                }
-              />
+              <List.Item title="No active streaks" actions={sharedActions()} />
             ) : (
               streakHabits.slice(0, 15).map((habit) => (
                 <List.Item
@@ -256,13 +325,7 @@ export default function Command() {
                   title={habit.name}
                   subtitle={habitStatusLabel(habit.status)}
                   icon={statusIcon(habit.status)}
-                  actions={
-                    <ActionPanel>
-                      <Action title="Refresh" icon={Icon.RotateClockwise} onAction={() => setRefreshCounter((value) => value + 1)} />
-                      <Action.CopyToClipboard title="Copy Summary" content={summaryText} />
-                      <Action title="Open Extension Preferences" icon={Icon.Gear} onAction={openExtensionPreferences} />
-                    </ActionPanel>
-                  }
+                  actions={sharedActions()}
                   accessories={[{ text: `${habit.currentStreak?.length ?? 0}d`, icon: streakIcon() }]}
                 />
               ))
@@ -274,13 +337,7 @@ export default function Command() {
               <List.Item
                 key={period.id}
                 title={period.name}
-                actions={
-                  <ActionPanel>
-                    <Action title="Refresh" icon={Icon.RotateClockwise} onAction={() => setRefreshCounter((value) => value + 1)} />
-                    <Action.CopyToClipboard title="Copy Summary" content={summaryText} />
-                    <Action title="Open Extension Preferences" icon={Icon.Gear} onAction={openExtensionPreferences} />
-                  </ActionPanel>
-                }
+                actions={sharedActions()}
                 accessories={[
                   { text: `${period.completed}/${period.count} completed`, icon: { source: Icon.CheckCircle, tintColor: "#20B26B" } },
                 ]}
@@ -293,13 +350,7 @@ export default function Command() {
               <List.Item
                 key={area.id}
                 title={area.name}
-                actions={
-                  <ActionPanel>
-                    <Action title="Refresh" icon={Icon.RotateClockwise} onAction={() => setRefreshCounter((value) => value + 1)} />
-                    <Action.CopyToClipboard title="Copy Summary" content={summaryText} />
-                    <Action title="Open Extension Preferences" icon={Icon.Gear} onAction={openExtensionPreferences} />
-                  </ActionPanel>
-                }
+                actions={sharedActions()}
                 accessories={[{ text: `${area.completed}/${area.count} completed`, icon: { source: Icon.CheckCircle, tintColor: "#20B26B" } }]}
               />
             ))}

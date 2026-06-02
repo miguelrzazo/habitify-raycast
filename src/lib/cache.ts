@@ -40,6 +40,10 @@ export async function readCache<T>(key: string): Promise<CacheRecord<T> | null> 
   }
 }
 
+export async function deleteCache(key: string) {
+  await LocalStorage.removeItem(key);
+}
+
 export async function writeCache<T>(key: string, data: T) {
   const record: CacheRecord<T> = {
     savedAt: new Date().toISOString(),

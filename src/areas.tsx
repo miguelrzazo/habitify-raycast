@@ -10,20 +10,25 @@ import {
 } from "@raycast/api";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import HabitDetail from "./components/HabitDetail";
-import { formatLocalDate } from "./lib/date";
-import { formatCacheTimestamp, habitifyCacheKeys, latestCacheTimestamp, readCache, writeCache } from "./lib/cache";
+import LogAmountForm from "./components/LogAmountForm";
+import { formatUTCDate } from "./lib/date";
+import { deleteCache, formatCacheTimestamp, habitifyCacheKeys, latestCacheTimestamp, readCache, writeCache } from "./lib/cache";
 import {
   Area,
   completeHabit,
+  deleteHabitLog,
+  fetchHabitLogs,
   getAreas,
   getHabits,
   getTodayJournal,
   habitProgressLabel,
   habitStatusLabel,
   isHabitifyError,
+  logHabitValue,
   mergeJournalWithHabits,
   resolveRowTint,
   skipHabit,
+  statusIcon,
   statusTintColor,
   streakIcon,
   TodayHabit,
@@ -35,22 +40,6 @@ interface Preferences {
   rowColorMode: "off" | "status" | "habit" | "area";
 }
 
-function statusIcon(status: TodayHabit["status"]) {
-  switch (status) {
-    case "completed":
-      return Icon.CheckCircle;
-    case "skipped":
-      return Icon.ArrowRight;
-    case "failed":
-      return Icon.XMarkCircle;
-    default:
-      return Icon.Circle;
-  }
-}
-
-function nextStatusForAction(action: "complete" | "undo") {
-  return action === "complete" ? "completed" : "inprogress";
-}
 
 function AreaHabitsView({
   area,
@@ -81,7 +70,7 @@ function AreaHabitsView({
       setCacheNotice(null);
 
       try {
-        const today = formatLocalDate(new Date());
+        const today = formatUTCDate(new Date());
         const journalCacheKey = habitifyCacheKeys.todayJournal(today);
         const habitsCacheKey = habitifyCacheKeys.habitsByArea(area.id);
 
@@ -143,47 +132,84 @@ function AreaHabitsView({
     void loadHabits();
   }, [loadHabits, refreshCounter]);
 
+  const handleRefresh = useCallback(() => {
+    void deleteCache(habitifyCacheKeys.habitsByArea(area.id));
+    setRefreshCounter((v) => v + 1);
+  }, [area.id]);
+
   const updateHabitStatus = useCallback((habitId: string, status: TodayHabit["status"]) => {
     setHabits((current) => current.map((habit) => (habit.id === habitId ? { ...habit, status } : habit)));
   }, []);
 
   const mutateHabit = useCallback(
-    async (habitId: string, habitName: string, action: "complete" | "undo" | "skip") => {
-      const targetDate = formatLocalDate(new Date());
+    async (habitId: string, habitName: string, action: "complete" | "undo" | "skip" | "decrement") => {
+      const targetDate = formatUTCDate(new Date());
       const rollbackSnapshot = habitsRef.current;
-      const toastPromise = showToast({
-        style: Toast.Style.Animated,
-        title:
-          action === "complete" ? "Completing habit…" : action === "skip" ? "Skipping habit…" : "Undoing habit…",
-      });
 
-      updateHabitStatus(habitId, action === "skip" ? "skipped" : nextStatusForAction(action));
+      const toastTitles: Record<typeof action, string> = {
+        complete: "Completing habit…",
+        undo: "Undoing habit…",
+        skip: "Skipping habit…",
+        decrement: "Removing last log…",
+      };
+
+      const toastPromise = showToast({ style: Toast.Style.Animated, title: toastTitles[action] });
+
+      if (action === "complete") updateHabitStatus(habitId, "completed");
+      else if (action === "undo") updateHabitStatus(habitId, "inprogress");
+      else if (action === "skip") updateHabitStatus(habitId, "skipped");
+      else {
+        setHabits((current) =>
+          current.map((h) => {
+            if (h.id !== habitId || !h.progress) return h;
+            const next = Math.max(0, h.progress.current - 1);
+            return { ...h, progress: { ...h.progress, current: next }, status: next === 0 ? "inprogress" : h.status };
+          }),
+        );
+      }
 
       try {
-        if (action === "complete") {
-          await completeHabit(apiKey, habitId, targetDate);
-        } else if (action === "skip") {
-          await skipHabit(apiKey, habitId, targetDate);
-        } else {
-          await undoHabit(apiKey, habitId, targetDate);
+        if (action === "complete") await completeHabit(apiKey, habitId, targetDate);
+        else if (action === "undo") await undoHabit(apiKey, habitId, targetDate);
+        else if (action === "skip") await skipHabit(apiKey, habitId, targetDate);
+        else {
+          const habit = habitsRef.current.find((h) => h.id === habitId);
+          const logs = await fetchHabitLogs(apiKey, habitId, targetDate);
+          if (logs.length > 0) {
+            const latest = [...logs].sort((a, b) => b.localLastModifiedDate - a.localLastModifiedDate)[0];
+            await deleteHabitLog(apiKey, habitId, latest.id);
+          } else {
+            await undoHabit(apiKey, habitId, targetDate);
+            const current = habit?.progress?.current ?? 0;
+            if (current > 1) {
+              const unitSymbol = habit?.progress?.unit ?? "";
+              await logHabitValue(apiKey, habitId, current - 1, unitSymbol, targetDate);
+            }
+          }
         }
 
+        const successTitles: Record<typeof action, string> = {
+          complete: "Habit completed",
+          undo: "Habit undone",
+          skip: "Habit skipped",
+          decrement: "Log removed",
+        };
         const toast = await toastPromise;
         toast.style = Toast.Style.Success;
-        toast.title = action === "complete" ? "Habit completed" : action === "skip" ? "Habit skipped" : "Habit undone";
+        toast.title = successTitles[action];
         toast.message = habitName;
         void loadHabits({ silent: true });
       } catch (err) {
         setHabits(rollbackSnapshot);
-
+        const failTitles: Record<typeof action, string> = {
+          complete: "Could not complete habit",
+          undo: "Could not undo habit",
+          skip: "Could not skip habit",
+          decrement: "Could not remove log",
+        };
         const toast = await toastPromise;
         toast.style = Toast.Style.Failure;
-        toast.title =
-          action === "complete"
-            ? "Could not complete habit"
-            : action === "skip"
-              ? "Could not skip habit"
-              : "Could not undo habit";
+        toast.title = failTitles[action];
         toast.message = isHabitifyError(err)
           ? `Habitify returned ${err.status}: ${err.message}`
           : err instanceof Error
@@ -204,7 +230,7 @@ function AreaHabitsView({
           actions={
             <ActionPanel>
               <Action title="Open Extension Preferences" onAction={openExtensionPreferences} />
-              <Action title="Retry" onAction={() => setRefreshCounter((value) => value + 1)} />
+              <Action title="Retry" onAction={handleRefresh} />
             </ActionPanel>
           }
         />
@@ -218,12 +244,12 @@ function AreaHabitsView({
         description="This area does not have any active habits right now."
         actions={
           <ActionPanel>
-            <Action title="Refresh" onAction={() => setRefreshCounter((value) => value + 1)} />
+            <Action title="Refresh" onAction={handleRefresh} />
           </ActionPanel>
         }
       />
     );
-  }, [area.name, error]);
+  }, [area.name, error, handleRefresh]);
 
   return (
     <List
@@ -265,18 +291,35 @@ function AreaHabitsView({
                       onAction={() => void mutateHabit(habit.id, habit.name, "undo")}
                     />
                   ) : (
-                    <>
-                      <Action
-                        title="Mark Completed"
-                        icon={{ source: Icon.CheckCircle, tintColor: "#20B26B" }}
-                        onAction={() => void mutateHabit(habit.id, habit.name, "complete")}
-                      />
-                      <Action
-                        title="Skip Today"
-                        icon={{ source: Icon.ArrowRight, tintColor: "#E8B200" }}
-                        onAction={() => void mutateHabit(habit.id, habit.name, "skip")}
-                      />
-                    </>
+                    <Action
+                      title="Mark Completed"
+                      icon={{ source: Icon.CheckCircle, tintColor: "#20B26B" }}
+                      onAction={() => void mutateHabit(habit.id, habit.name, "complete")}
+                    />
+                  )}
+                  {habit.progress && (
+                    <Action.Push
+                      title="Log Amount"
+                      icon={Icon.Plus}
+                      shortcut={{ modifiers: ["cmd"], key: "l" }}
+                      target={<LogAmountForm habit={habit} apiKey={apiKey} onSuccess={handleRefresh} />}
+                    />
+                  )}
+                  {habit.status === "inprogress" && (
+                    <Action
+                      title="Skip"
+                      icon={Icon.ArrowRight}
+                      shortcut={{ modifiers: ["cmd"], key: "s" }}
+                      onAction={() => void mutateHabit(habit.id, habit.name, "skip")}
+                    />
+                  )}
+                  {habit.progress && habit.progress.current > 0 && (
+                    <Action
+                      title="Remove Last Log"
+                      icon={Icon.Minus}
+                      shortcut={{ modifiers: ["cmd", "shift"], key: "backspace" }}
+                      onAction={() => void mutateHabit(habit.id, habit.name, "decrement")}
+                    />
                   )}
                   <Action.Push
                     title="View Statistics"
@@ -286,14 +329,14 @@ function AreaHabitsView({
                         apiKey={apiKey}
                         habitId={habit.id}
                         habitName={habit.name}
-                        onRefresh={() => setRefreshCounter((value) => value + 1)}
+                        onRefresh={handleRefresh}
                       />
                     }
                   />
                   <Action
                     title="Refresh"
                     icon={Icon.RotateClockwise}
-                    onAction={() => setRefreshCounter((value) => value + 1)}
+                    onAction={handleRefresh}
                     shortcut={{ modifiers: ["cmd"], key: "r" }}
                   />
                   <Action.CopyToClipboard title="Copy Habit ID" content={habit.id} />
@@ -357,7 +400,7 @@ export default function Command() {
           actions={
             <ActionPanel>
               <Action title="Open Extension Preferences" onAction={openExtensionPreferences} />
-              <Action title="Retry" onAction={() => setRefreshCounter((value) => value + 1)} />
+              <Action title="Retry" onAction={handleRefresh} />
             </ActionPanel>
           }
         />
@@ -392,7 +435,6 @@ export default function Command() {
             key={area.id}
             title={area.name}
             icon={area.colorHex ? { source: Icon.House, tintColor: area.colorHex } : Icon.House}
-            accessories={[{ text: area.id.slice(0, 6), icon: Icon.Tag }]}
             actions={
               <ActionPanel title={area.name}>
                   <Action.Push

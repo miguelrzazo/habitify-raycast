@@ -3,7 +3,6 @@
   "title": "Habitify",
   "description": "Manage Habitify habits from Raycast.",
   "version": "0.1.0",
-  "private": true,
   "icon": "icon.png",
   "author": "razz13",
   "license": "MIT",
@@ -50,12 +49,6 @@
       "name": "index",
       "title": "Today Habits",
       "description": "View and manage today's Habitify habits.",
-      "mode": "view"
-    },
-    {
-      "name": "due-now",
-      "title": "Due Now",
-      "description": "Show only habits scheduled for the current time of day.",
       "mode": "view"
     },
     {

@@ -1,5 +1,5 @@
 import { Action, ActionPanel, Detail, Icon, showToast, Toast } from "@raycast/api";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   completeHabit,
   formatTimeOfDayRange,
@@ -15,7 +15,7 @@ import {
   TimeOfDay,
   undoHabit,
 } from "../lib/habitify";
-import { formatLocalDate } from "../lib/date";
+import { formatUTCDate } from "../lib/date";
 import { formatCacheTimestamp, habitifyCacheKeys, latestCacheTimestamp, readCache, writeCache } from "../lib/cache";
 
 type Props = {
@@ -46,11 +46,21 @@ function buildMarkdown(habit: Habit | null, stats: HabitStatistics | null) {
     ? `${goal.value} ${goal.unit}${habit.logMethod === "auto" ? " (auto)" : ""}`
     : "No active goal";
 
-  const recentProgress = (stats.dailyProgress ?? []).slice(-7).reverse();
+  const statusEmoji: Record<string, string> = {
+    completed: "✅",
+    skipped: "⏭️",
+    failed: "❌",
+    inprogress: "⬜",
+  };
+
+  const recentProgress = (stats.dailyProgress ?? []).slice(-30).reverse();
   const recentMarkdown =
     recentProgress.length > 0
       ? recentProgress
-          .map((day) => `- ${day.date}: ${habitStatusLabel(day.status)}${day.totalLog ? ` (${formatQuantity(day.totalLog, unit)})` : ""}`)
+          .map(
+            (day) =>
+              `- ${day.date}: ${statusEmoji[day.status] ?? "⬜"} ${habitStatusLabel(day.status)}${day.totalLog ? ` (${formatQuantity(day.totalLog, unit)})` : ""}`,
+          )
           .join("\n")
       : "- No recent progress available";
 
@@ -66,7 +76,7 @@ export default function HabitDetail({ apiKey, habitId, habitName, onRefresh }: P
   const [error, setError] = useState<string | null>(null);
   const [cacheNotice, setCacheNotice] = useState<string | null>(null);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     setCacheNotice(null);
@@ -76,12 +86,8 @@ export default function HabitDetail({ apiKey, habitId, habitName, onRefresh }: P
       const statsCacheKey = habitifyCacheKeys.stats(habitId);
       const [cachedHabit, cachedStats] = await Promise.all([readCache<Habit>(habitCacheKey), readCache<HabitStatistics>(statsCacheKey)]);
 
-      if (cachedHabit) {
-        setHabit(cachedHabit.data);
-      }
-      if (cachedStats) {
-        setStats(cachedStats.data);
-      }
+      if (cachedHabit) setHabit(cachedHabit.data);
+      if (cachedStats) setStats(cachedStats.data);
       if (cachedHabit && cachedStats) {
         const cachedAt = latestCacheTimestamp(cachedHabit.savedAt, cachedStats.savedAt);
         setCacheNotice(cachedAt ? `Showing cached data from ${formatCacheTimestamp(cachedAt)}` : "Showing cached data");
@@ -106,27 +112,25 @@ export default function HabitDetail({ apiKey, habitId, habitName, onRefresh }: P
       setHabit(liveHabit);
       setStats(liveStats);
 
-      if (habitResponse.status === "fulfilled") {
-        await writeCache(habitCacheKey, habitResponse.value.data);
-      }
-      if (statsResponse.status === "fulfilled") {
-        await writeCache(statsCacheKey, statsResponse.value.data);
-      }
+      if (habitResponse.status === "fulfilled") await writeCache(habitCacheKey, habitResponse.value.data);
+      if (statsResponse.status === "fulfilled") await writeCache(statsCacheKey, statsResponse.value.data);
 
       if (habitResponse.status !== "fulfilled" || statsResponse.status !== "fulfilled") {
         const cachedAt = latestCacheTimestamp(cachedHabit?.savedAt, cachedStats?.savedAt);
         setCacheNotice(cachedAt ? `Showing cached data from ${formatCacheTimestamp(cachedAt)}` : "Showing cached data");
+      } else {
+        setCacheNotice(null);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to load habit details.");
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [apiKey, habitId]);
 
   useEffect(() => {
     void load();
-  }, [apiKey, habitId]);
+  }, [load]);
 
   const markdown = useMemo(() => {
     if (error) {
@@ -136,31 +140,39 @@ export default function HabitDetail({ apiKey, habitId, habitName, onRefresh }: P
   }, [error, habit, habitName, stats]);
 
   const mutate = async (action: "complete" | "undo" | "skip") => {
-    const targetDate = formatLocalDate(new Date());
-    const toastPromise = showToast({
-      style: Toast.Style.Animated,
-      title: action === "complete" ? "Completing habit…" : action === "skip" ? "Skipping habit…" : "Undoing habit…",
-    });
+    const targetDate = formatUTCDate(new Date());
+    const titles: Record<typeof action, string> = {
+      complete: "Completing habit…",
+      undo: "Undoing habit…",
+      skip: "Skipping habit…",
+    };
+    const toastPromise = showToast({ style: Toast.Style.Animated, title: titles[action] });
 
     try {
-      if (action === "complete") {
-        await completeHabit(apiKey, habitId, targetDate);
-      } else if (action === "skip") {
-        await skipHabit(apiKey, habitId, targetDate);
-      } else {
-        await undoHabit(apiKey, habitId, targetDate);
-      }
+      if (action === "complete") await completeHabit(apiKey, habitId, targetDate);
+      else if (action === "undo") await undoHabit(apiKey, habitId, targetDate);
+      else await skipHabit(apiKey, habitId, targetDate);
+
+      const successTitles: Record<typeof action, string> = {
+        complete: "Habit completed",
+        undo: "Habit undone",
+        skip: "Habit skipped",
+      };
       const toast = await toastPromise;
       toast.style = Toast.Style.Success;
-      toast.title = action === "complete" ? "Habit completed" : action === "skip" ? "Habit skipped" : "Habit undone";
+      toast.title = successTitles[action];
       toast.message = `Updated ${habitName} for ${targetDate}.`;
       await load();
       onRefresh?.();
     } catch (err) {
+      const failTitles: Record<typeof action, string> = {
+        complete: "Could not complete habit",
+        undo: "Could not undo habit",
+        skip: "Could not skip habit",
+      };
       const toast = await toastPromise;
       toast.style = Toast.Style.Failure;
-      toast.title =
-        action === "complete" ? "Could not complete habit" : action === "skip" ? "Could not skip habit" : "Could not undo habit";
+      toast.title = failTitles[action];
       toast.message = isHabitifyError(err)
         ? `Habitify returned ${err.status}: ${err.message}`
         : err instanceof Error
@@ -178,7 +190,7 @@ export default function HabitDetail({ apiKey, habitId, habitName, onRefresh }: P
         <ActionPanel title={habitName}>
           <Action title="Refresh" icon={Icon.RotateClockwise} onAction={() => void load()} />
           <Action title="Mark Completed" icon={{ source: Icon.CheckCircle, tintColor: "#20B26B" }} onAction={() => void mutate("complete")} />
-          <Action title="Skip Today" icon={{ source: Icon.ArrowRight, tintColor: "#E8B200" }} onAction={() => void mutate("skip")} />
+          <Action title="Skip" icon={Icon.ArrowRight} shortcut={{ modifiers: ["cmd"], key: "s" }} onAction={() => void mutate("skip")} />
           <Action title="Undo Today" icon={Icon.ArrowCounterClockwise} onAction={() => void mutate("undo")} />
         </ActionPanel>
       }

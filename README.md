@@ -1,41 +1,33 @@
-# Habitify Raycast
+# Habitify for Raycast
 
-A Raycast extension for Habitify that lets you inspect today's habits, mark them complete, undo today's log, and open a habit statistics view.
+Manage your [Habitify](https://habitify.me) habits without leaving your keyboard.
+
+> **Disclaimer:** This is an unofficial, community-built extension and is not affiliated with, endorsed by, or in any way officially connected to Habitify or its developers. The Habitify name and logo are property of their respective owners.
 
 ## Features
-- View today's Habitify habits in Raycast.
-- Mark a habit as completed.
-- Undo today's log for a habit.
-- See basic habit statistics in a detail view.
+
+- **Today Habits** — view all of today's habits, filter by time of day or area, mark complete, skip, undo, or log a measurable amount. Habits are split into Today (daily), This Week (weekly), and This Month (monthly) sections.
+- **Current Time of Day** — see only the habits due right now, with the same Today / This Week / This Month split.
+- **Habit Areas** — browse your habits organised by Habitify area, with full action support.
+- **Today Stats** — at-a-glance completion rates for today, this week, and this month, plus active streaks and breakdowns by time of day and area.
+
+All commands use a stale-while-revalidate cache so they open instantly and refresh in the background.
 
 ## Requirements
-- macOS
-- Raycast installed
-- A paid Habitify account with API access enabled
-- Habitify API key from **Settings > API**
-- A logged-in Raycast CLI session if you want to run `ray lint` / `ray build`
+
+- macOS with Raycast installed
+- A Habitify account with API access enabled (requires a paid plan)
+- Your Habitify API key — find it in **Habitify → Settings → API**
 
 ## Setup
-1. Install dependencies:
-   ```bash
-   npm install
-   ```
-2. Open the extension in Raycast development mode:
-   ```bash
-   npm run dev
-   ```
-3. In Raycast preferences for the extension, paste your Habitify API key.
 
-## Usage
-- Run **Today Habits** from Raycast.
-- Select a habit to complete or undo it.
-- Open the detail view to see basic stats.
+1. Install the extension from the Raycast Store.
+2. Open Raycast and run any Habitify command.
+3. Paste your API key when prompted (or open **Extension Preferences** to change it later).
 
-## Development
-- `npm run lint` — validate the extension.
-- `npm run build` — build a submission-ready bundle.
+## Preferences
 
-## Notes
-- The extension talks to the Habitify v2 REST API at `https://api.habitify.me/v2`.
-- Authentication uses the `X-API-Key` header.
-- Habitify API access requires a paid plan.
+| Preference | Description |
+|---|---|
+| **API Key** | Your Habitify API key. |
+| **Row Color Mode** | Tint habit rows by status color, habit color, area color, or disable coloring entirely. |
